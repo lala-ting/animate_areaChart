@@ -1,0 +1,791 @@
+<!doctype>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"> 
+        <title>流量监控图</title>
+		<script type="text/javascript" src="d3.min_04_30_15.js"></script>
+		<style>
+			*{
+				margin:0;
+				padding:0;
+			}
+			div{
+				box-sizing: border-box;
+			}
+			.header-box{
+				position: absolute;
+			    opacity: 1;
+			    left: 0px;
+			    top: 0px;
+			    background-color: rgb(59, 78, 87);
+			    position: relative;
+			    padding: 10px;
+			    
+			}
+			#titleBar,#date{
+				color: #C5C4C4;
+			    text-align: center;
+			}
+			.nohighlight{
+				width:36px;
+				height:36px;
+				background-size: 100%;
+				position: absolute;
+				bottom:5px;
+			}
+			#dragFab{
+				background-position-y: 2px;
+			}
+			.pointLine{
+				stroke: rgb(255, 255, 255);
+			    stroke-opacity: 0.3;
+			    stroke-width: 1.28px;
+			    stroke-dasharray: 3.2px, 2.24px;
+			}
+			.labelbBg{
+				width: 56.8615px;
+    			height: 21.6615px;
+    			opacity: 0.5;
+    			background-color: rgb(0, 0, 0);
+			}
+			.ripplesvg1,.ripplesvg2,.ripplesvg3{
+				position: absolute;
+			    top: 0;
+			    left: 0;
+			    width:100%;
+			    height:100%;
+			}
+
+		</style>
+		<script>
+			var lastTime = 0;
+			
+			var requestAnimationFrame = window.requestAnimationFrame;
+			var cancelAnimationFrame = window.cancelAnimationFrame;
+			
+
+			//如果当前浏览器不支持requestAnimationFrame和cancelAnimationFrame，则会退到setTimeout
+			if ( !requestAnimationFrame || !cancelAnimationFrame ) {
+			    requestAnimationFrame = function( callback, element ) {
+			      var currTime = new Date().getTime();
+			      //为了使setTimteout的尽可能的接近每秒60帧的效果
+			      var timeToCall = Math.max( 0, 16 - ( currTime - lastTime ) ); 
+			      var id = window.setTimeout( function() {
+			        callback( currTime + timeToCall );
+			      }, timeToCall );
+			      lastTime = currTime + timeToCall;
+			      return id;
+			    };
+			    
+			    cancelAnimationFrame = function( id ) {
+			      window.clearTimeout( id );
+			    };
+			}
+
+			
+			window.requestAnimationFrame = requestAnimationFrame; 
+			window.cancelAnimationFrame = cancelAnimationFrame;
+		</script>
+	</head>
+	<body>
+		<div class="header-box">
+			<div id="titleBar">流量走势图</div>
+			<div id="date"></div>
+			<div id="fabBack" class="nohighlight" style="background-image: url(images/fab_back.png);"></div>
+			<div id="dragFab" class="nohighlight" style="background-image: url(images/drag_fab3.png);"></div>
+		</div>
+		<div class="content-box"></div>
+	</body>
+	<script>
+		//获取屏幕宽度和高度
+		var screenWidth  = window.innerWidth;
+		var screenHeight = window.innerHeight;
+		var midLineXPosition = 0;
+		//顶部灰色区域高度
+		var headerHeight = .338461538*screenWidth;
+		var chartHeight = screenHeight - .338461538*screenWidth;
+
+		var myScale = null;
+		var mychartData = null;
+		var myArea = null;
+		var maxDataPoint = 0;
+		var	myxAxisTop = null;
+		var	myxAxisBottom =  null;
+		var zoomWheel = 0;
+		var zoomMove = 0;
+		var xS = 0;
+		var yS = 0;
+		var initTimeScaleParam = [2,-93];//倍数,offset
+		
+		var colors = ["#F48FB1", "#FFAF49", "#7986CB", "#2DA4A9", "#E57373"];
+		var gradients = ["#C01B3E", "#FF653A", "#2D4FAC", "#3F5874", "#C62828"];
+		var wrapper;
+		var moveDis;
+		var zoomMaxValue = screenWidth*initTimeScaleParam[0] - initTimeScaleParam[1];
+		var zoomMinValue = initTimeScaleParam[1];
+		
+
+		//初始化，设置一些标签的尺寸
+		function initialize(){
+			d3.select(".header-box")
+				.style("width",screenWidth+"px")
+				.style("height",headerHeight+"px");
+			d3.select(".content-box")
+				.style("width",screenWidth+"px")
+				.style("height",chartHeight+"px");
+		}
+
+		function draw(){
+			d3.csv('demo_01.csv', function(data){
+				createChart(dataFormat(data));
+			});
+		}
+		//用于把data数据转换为正常的格式
+		function dataFormat(data){
+			var targetDataObj=[];//存储转换后的数据
+			var tempData = data;
+			//把csv的数据格式化为字符串
+			var tempData = d3.csv.format( data );         
+		    //把字符串转换为数组，以换行为分隔符
+		    tempDataArray = tempData.split('\n');
+		    //把数组转换为对象
+		    for(var i=0;i<tempDataArray.length;i++){
+
+		    	var obj = new Object();
+		    	obj.flow = tempDataArray[i].split(",")[2]==""?0:tempDataArray[i].split(",")[2];
+		    	obj.newoffice = tempDataArray[i].split(",")[0]==""?0:tempDataArray[i].split(",")[0];
+		    	obj.time = tempDataArray[i].split(",")[1]==""?0:tempDataArray[i].split(",")[1];
+		 		targetDataObj.push(obj);
+		    	
+		    }
+		    // console.log(targetDataObj);
+		    return targetDataObj;
+		}
+
+		function createChart(data){
+			
+			wrapper = d3.select(".content-box");
+			
+			var charts = [];
+			
+							
+			//找出最大的flow
+			data.forEach(function(d) {
+					for (var prop in d) {
+						if (d.hasOwnProperty(prop)) {
+							if (prop != 'newoffice' && prop != 'time') {
+								d[prop] = parseFloat(d[prop]);
+											
+									if (d[prop] > maxDataPoint) {
+										maxDataPoint = d[prop];
+									}
+							}
+										
+						}
+
+					}
+								
+							
+					d.time=new Date(d.time.replace(/-/g,"/"));
+
+			});
+			//实例化chart	
+			for(var i = 0; i < 1; i++){
+				var bgcolor = colors[i];
+				charts.push(
+					new Chart({
+							data: data.slice(),
+							id: i,
+							name: "access",
+							width: screenWidth,
+							height: chartHeight,
+							maxDataPoint: maxDataPoint,
+							bgcolor:bgcolor,
+							currindex:i,
+							showBottomAxis: 0
+					}));
+					
+			}
+							
+		}
+
+		function Chart(options){
+					mychartData = options.data;
+					this.chartData = options.data;
+					this.width = options.width;
+					this.height = options.height;
+					this.maxDataPoint = options.maxDataPoint;
+					this.id = options.id;
+					this.name = options.name;
+					this.showBottomAxis = options.showBottomAxis;
+					this.bgcolor = options.bgcolor;
+					this.index = options.currindex;
+							
+					var localName = this.name;
+					var listitem,svg,defs;
+							
+					/* XScale is time based */
+					//d3.extent找出一个数组中的最大值和最小值
+					//this.chartData.map(function(d) { return d.time; }返回time字段组成的数组
+					console.log("maxDataPoint:"+maxDataPoint);
+					var myLinear = d3.scale.linear()
+										.range([0,maxDataPoint+50])
+										.domain([0,maxDataPoint]);
+					this.xScale = d3.time.scale()
+									.range([0,screenWidth])
+									.domain(d3.extent(this.chartData.map(function(d) { return d.time; })));
+							
+					this.yScale = d3.scale.linear()
+									.range([chartHeight,0])
+									.domain([0,myLinear(this.maxDataPoint)]);
+					//设置一个全局的，zoom操作用到							
+					myScale = this.xScale;
+							
+					xS = this.xScale;
+					yS = this.yScale;
+					
+					this.listitem = wrapper.append("div")
+											.attr('class',"listitem")
+											.style("width",screenWidth+"px")
+											.style("height",chartHeight+"px");
+					this.svg = this.listitem.append("svg")
+											.attr("width",screenWidth+"px")
+											.attr("height",chartHeight+"px");
+
+
+
+					gradient = this.svg.append("defs").append("linearGradient").attr("id", this.index + "gradient").attr("x1", 0).attr("x2", 0).attr("y1", 0).attr("y2", "100%"),
+					gradient.append("stop").attr("offset", .2).style("stop-color",gradients[this.index] ).style("stop-opacity", .9),
+					gradient.append("stop").attr("offset", 1).style("stop-color", gradients[this.index]).style("stop-opacity", .2);
+
+
+					//做往上升起的动画		
+					//最终状态的面积图
+					this.area = d3.svg.area()
+									.x(function(d) { 
+												
+										return xS(d.time);
+									})
+									.y0(screenHeight)
+									.y1(function(d) { 
+										return yS(d.flow);
+									});
+					myArea = this.area;
+					//初始状态的面积图
+					var area_b = d3.svg.area()
+						.x(function(d) { return xS(d.time); })
+						.y0(screenHeight)
+						.y1(function(d) { return yS(0); });
+							
+					this.chartContainer = this.svg.append("g")
+											.attr('class',this.name.toLowerCase());
+					
+							
+					this.chartContainer.append("rect")
+										.attr("width",screenWidth)
+										.attr("height",screenHeight)
+										.style("fill", this.bgcolor)
+										.style("stroke-width", 0);
+			
+					//给面积图描边							
+					this.chartContainer.append("path")
+										.data([this.chartData])
+										.attr("class","chartLine")
+										.attr("d",area_b)
+										.transition().duration(600)
+										.attr("d",this.area)
+										.style("stroke", "#ffffff")
+										.style("stroke-opacity", .8)
+										.style("fill-opacity", 0)
+										
+					//真正的面积图
+					this.chartContainer.append("path")
+										.data([this.chartData])
+										.attr("class", "chart")
+										.style("width",0)
+										.style("fill", "url(#" + this.index + "gradient)")
+										.attr("clip-path", "url(#clip-" + this.id + ")")
+										.attr("d",area_b)
+										.transition().duration(600)
+										.attr("d", this.area)
+    									.style("width", screenWidth)
+
+					var showcurrpointbox = this.svg.append("g");
+					var line = showcurrpointbox.append("line")
+												.attr('class',"pointLine")
+												// .attr("x1",xS(xS.invert(midLineXPosition)))
+												// .attr("x2",xS(xS.invert(midLineXPosition)))
+												.attr("x1",midLineXPosition)
+												.attr("x2",midLineXPosition)
+												.attr("y1",0)
+												.attr("y2",screenHeight)
+												.attr("opacity",0);
+
+
+					var xyMidLine = getXunit(mychartData.map(function(d){
+									return xS(d.time);
+								}),
+								mychartData.map(function(d){
+									return yS(d.flow);
+								})
+								,screenWidth/2);
+
+					//画圆圈
+					showcurrpointbox.append("circle").attr("class","circlebg")
+													 .attr("cx",midLineXPosition)
+													 .attr("cy",xyMidLine[1])
+													 .attr("r",function(d){
+										 								return 7;
+										 			  })
+													 .attr("fill",gradients[0])
+													 .attr("opacity",0);
+					showcurrpointbox.append("circle").attr("class","circleup")
+													 .attr("cx",midLineXPosition)
+													 .attr("cy",xyMidLine[1])
+													 .attr("r",function(d){
+										 								return 3.5;
+										 			  })
+													 .attr("fill","#fff")
+													 .attr("opacity",0);
+					//显示当前点的数据的背景（初始化）
+					var textBg = showcurrpointbox.append("rect")
+												 .attr("class","labelbBg")
+												 .attr("x",midLineXPosition-60)//减去60是为了动画还没开始的时候隐藏它
+												 .attr("y",xyMidLine[1])
+												 .attr("rx",4.33231+"px")
+												 .attr("ry",4.33231+"px")
+												 .attr("opacity",0);
+					//显示当前点的数据(初始化)
+					var currText = showcurrpointbox.append("text")
+										.attr("class","currText")
+										.attr("x", midLineXPosition)
+										.attr("y",xyMidLine[1])
+										.text(this.chartData[xyMidLine[2]].flow)
+										.attr("fill","#fff")
+										.attr("opacity",0);
+					d3.select("#date").text(dateFormat(this.chartData[xyMidLine[2]].time));
+
+													
+					//触摸屏(触发zoom事件)
+					this.chartContainer.append("rect")
+										.attr("class","myrect")
+										.attr("width",screenWidth)
+										.attr("height",screenHeight)
+										.attr("opacity",0)
+										.style("fill", this.bgcolor)
+										.style("stroke-width", 0)
+										.call(d3.behavior.zoom().on("zoom", this.zoom));
+
+					d3.select("#dragFab").call(d3.behavior.drag().on("drag",this.onDragFn));						
+					
+					this.xAxisBottom = d3.svg.axis().scale(this.xScale).orient("bottom");//数字是在横线下面的
+					myxAxisBottom = this.xAxisBottom;
+				
+							
+					if(!this.showBottomAxis){
+									this.chartContainer.append("g")
+											.attr("class", "x axis bottom")
+											// .attr("transform", "translate(0,"+this.height+")")
+											.attr("transform", "translate(0,0)")
+											.style("opacity",0)
+											.call(this.xAxisBottom);
+					}  
+								
+					this.yAxis = d3.svg.axis().scale(this.yScale).orient("left").ticks(10);
+								
+					this.chartContainer.append("g")
+										.attr("class", "y axis")
+										.attr("transform", "translate(30,0)")
+										.style("opacity",0)//隐藏左刻度
+										.call(this.yAxis);
+
+					//启动动画入口
+					setTimeout(animate,600);
+							
+				}
+				//拖动事件
+				Chart.prototype.onDragFn =function (){
+						var offset = 18+10;
+						var moveDelta = d3.event.x;
+						// if(moveDelta<d3.select("#dragFab").attr("width")+offset){
+						// 	moveDelta = d3.select("#dragFab").attr("width")+offset;
+						// }
+						// else if(moveDelta >screenWidth-d3.select("#dragFab").attr("width")*2-offset){
+						// 	moveDelta = screenWidth-d3.select("#dragFab").attr("width")*2-offset;
+
+						// }
+					
+						var xyMidLine = getXunit(mychartData.map(function(d){
+									return xS(d.time);
+								}),
+								mychartData.map(function(d){
+									return yS(d.flow);
+								})
+								,moveDelta);
+
+
+						d3.select("#dragFab").attr("style","background-image: url(images/drag_fab3.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+						d3.select("#fabBack").attr("style","background-image: url(images/fab_back.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+						///////////////////////////修改中线
+							midLineXPosition=xyMidLine[0];
+								
+								d3.select("line.pointLine")
+										.attr("x1",xyMidLine[0])
+										.attr("x2",xyMidLine[0])
+										.attr("y1",0)
+										.attr("y2",chartHeight).attr("opacity",1);
+								d3.select("circle.circlebg")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 7;
+							 							}).attr("opacity",1);
+								d3.select("circle.circleup")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 3.5;
+							 							}).attr("opacity",1);
+								d3.select("rect.labelbBg")
+										.attr("class","labelbBg")
+										.attr("x",xS(xS.invert(midLineXPosition))-28)
+										.attr("y",xyMidLine[1]-30)
+										.attr("rx",4.33231+"px")
+										.attr("ry",4.33231+"px").attr("opacity",1);
+								d3.select("text.currText")
+										.attr("x", xS(xS.invert(midLineXPosition))-12)
+										.attr("y",xyMidLine[1]-15)
+										.text(mychartData[xyMidLine[2]].flow)
+										.attr("fill","#fff").attr("opacity",1);
+								d3.select("#date").text(dateFormat(mychartData[xyMidLine[2]].time));
+
+					}
+				//放大缩小事件
+				Chart.prototype.zoom = function (){
+								// console.log(0);console.log(d3.event.scale*1);
+								// console.log(d3.event.translate[0]);
+								var offset = 18+10;
+								myScale.range([0+d3.event.translate[0],screenWidth*initTimeScaleParam[0]*d3.event.scale+d3.event.translate[0]])
+									   .domain(d3.extent(mychartData.map(function(d) { return d.time; })));	
+
+							
+								d3.select("g.x.axis.bottom")
+												.call(myxAxisBottom);
+								d3.select("path.chart").attr("d", myArea);
+								d3.select("path.chartLine").attr("d", myArea);
+
+								var xyMidLine = getXunit(mychartData.map(function(d){
+									return xS(d.time);
+								}),
+								mychartData.map(function(d){
+									return yS(d.flow);
+								})
+								,midLineXPosition);
+
+
+								//console.log(xyMidLine);
+								d3.select("line.pointLine")
+										.attr("x1",xyMidLine[0])
+										.attr("x2",xyMidLine[0])
+										.attr("y1",0)
+										.attr("y2",chartHeight);
+								d3.select("circle.circlebg")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 7;
+							 							});
+								d3.select("circle.circleup")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 3.5;
+							 							});
+								d3.select("rect.labelbBg")
+										.attr("class","labelbBg")
+										.attr("x",xS(xS.invert(midLineXPosition))-28)
+										.attr("y",xyMidLine[1]-30)
+										.attr("rx",4.33231+"px")
+										.attr("ry",4.33231+"px");
+								d3.select("text.currText")
+										.attr("x", xS(xS.invert(midLineXPosition))-12)
+										.attr("y",xyMidLine[1]-15)
+										.text(mychartData[xyMidLine[2]].flow)
+										.attr("fill","#fff");
+								d3.select("#date").text(dateFormat(mychartData[xyMidLine[2]].time));
+
+								d3.select("#dragFab").attr("style","background-image: url(images/drag_fab3.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+								d3.select("#fabBack").attr("style","background-image: url(images/fab_back.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+									
+										
+
+					}
+					/*	inputX是中线在屏幕的横坐标像素
+						xlist是横坐标组成的数组（经过比例尺变换后的），即时间
+						ylist是纵坐标组成的数组（经过比例尺变换后的），即流量
+						outputX:inputX对应的时间
+						ylist[i]:inputX对应的流量
+						i:找出的目标点的索引
+					*/
+					function getXunit(xlist,ylist,inputX){
+								var outputX = 0;
+								//两个点之间的距离的一半				
+								var bar =  (xlist[1]-xlist[0])/2;
+								var i =  0;
+								for ( i =  0; i < xlist.length; i++) {							
+									if (xlist[i]+bar>=inputX && xlist[i]-bar <= inputX){
+										outputX = xlist[i];	break;
+									}
+								};
+								if(inputX >= xlist[xlist.length-1]){return [inputX,screenHeight-250,i];}
+								if(inputX <= xlist[0]){return [inputX,screenHeight-250,i];}							
+								if(outputX == 0);
+								return [outputX,ylist[i],i];
+					}
+
+					function dateFormat(dateObj){
+						var month = parseInt(dateObj.getMonth())+1
+						return dateObj.getFullYear()+"-"+month+"-"+dateObj.getDate()+" "+dateObj.getHours()+":"+dateObj.getMinutes()+":"+
+							   dateObj.getSeconds();
+					}
+					//渲染左边的光圈
+					function rippleLeft(){
+						var pointerbox = d3.select("body").append("svg").attr("class","ripplesvg1");
+						var pointerleft = pointerbox.append("g").append("circle");
+						pointerleft.style("fill","#fff").attr("cx","0px").attr("cy","0px").attr("r","30px").style("opacity", .3);
+    					pointerleft.transition()
+    							.duration(500)
+		    					.ease("in-out")
+		    					.style("-webkit-transform", "scale(13)")
+		    					.style("transform", "scale(13)")
+		    					.style("-o-transform", "scale(13)")
+		    					.style("-ms-transform", "scale(13)")
+		    					.style("-moz-transform", "scale(13)")
+		    					.style("opacity", .1)
+		    					.transition()
+		    					.style("opacity", 0)
+		    					.transition()
+		    					.duration(0)
+		    					.style("-webkit-transform", "scale(0)")
+		    					.style("transform", "scale(0)")
+		    					.style("-o-transform", "scale(0)")
+		    					.style("-ms-transform", "scale(0)")
+		    					.style("-moz-transform", "scale(0)");
+					}
+
+					function rippleLeft1(){
+						var pointerbox = d3.select("body").append("svg").attr("class","ripplesvg3");
+						var pointerleft = pointerbox.append("g").append("circle");
+						pointerleft.style("fill","#fff").attr("cx","0px").attr("cy","0px").attr("r","30px").style("opacity", .3);
+    					pointerleft.transition()
+    							.duration(500)
+		    					.ease("in-out")
+		    					.style("-webkit-transform", "scale(13)")
+		    					.style("transform", "scale(13)")
+		    					.style("-o-transform", "scale(13)")
+		    					.style("-ms-transform", "scale(13)")
+		    					.style("-moz-transform", "scale(13)")
+		    					.style("opacity", .1)
+		    					.transition()
+		    					.style("opacity", 0)
+		    					.transition()
+		    					.duration(0)
+		    					.style("-webkit-transform", "scale(0)")
+		    					.style("transform", "scale(0)")
+		    					.style("-o-transform", "scale(0)")
+		    					.style("-ms-transform", "scale(0)")
+		    					.style("-moz-transform", "scale(0)");
+					}
+					//渲染右边的光圈
+					function rippleRight(){
+						var pointerbox = d3.select("body").append("svg").attr("class","ripplesvg2");
+						var pointerright = pointerbox.append("g").append("circle");
+						pointerright.style("fill","#fff").attr("cx","30px").attr("cy","0px").attr("r","30px").style("opacity", .2);
+    					pointerright.transition()
+    							.duration(500)
+		    					.ease("in-out")
+		    					.style("-webkit-transform", "scale(8)")
+		    					.style("transform", "scale(8)")
+		    					.style("-o-transform", "scale(8)")
+		    					.style("-ms-transform", "scale(8)")
+		    					.style("-moz-transform", "scale(8)")
+		    					.style("opacity", .1)
+		    					.transition()
+		    					.style("opacity", 0)
+		    					.transition()
+		    					.duration(100)
+		    					.style("-webkit-transform", "scale(0)")
+		    					.style("transform", "scale(0)")
+		    					.style("-o-transform", "scale(0)")
+		    					.style("-ms-transform", "scale(0)")
+		    					.style("-moz-transform", "scale(0)");
+					}
+
+					function setRippleBoxNone(){
+						d3.select(".ripplesvg1").style("display","none");
+						d3.select(".ripplesvg2").style("display","none");
+						d3.select(".ripplesvg3").style("display","none");
+					}
+
+					function animate(){
+						 var offset = 18+10;
+						
+						
+							
+							// if(moveDis<d3.select("#dragFab").attr("width")+offset){
+							// 	moveDis = d3.select("#dragFab").attr("width")+offset;
+							// }
+							// else if(moveDis >screenWidth-d3.select("#dragFab").attr("width")*2-offset){
+							// 	moveDis = screenWidth-d3.select("#dragFab").attr("width")*2-offset;
+							// }
+						
+						var xyMidLine = getXunit(mychartData.map(function(d){
+									return xS(d.time);
+								}),
+								mychartData.map(function(d){
+									return yS(d.flow);
+								})
+								,moveDis);
+
+
+						d3.select("#dragFab").attr("style","background-image: url(images/drag_fab3.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+						d3.select("#fabBack").attr("style","background-image: url(images/fab_back.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+						///////////////////////////修改中线
+							midLineXPosition=xyMidLine[0];
+								//console.log(xyMidLine);
+								d3.select("line.pointLine")
+										.attr("x1",xyMidLine[0])
+										.attr("x2",xyMidLine[0])
+										.attr("y1",0)
+										.attr("y2",chartHeight).attr("opacity",1);
+								d3.select("circle.circlebg")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 7;
+							 							}).attr("opacity",1);
+								d3.select("circle.circleup")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 3.5;
+							 							}).attr("opacity",1);
+								d3.select("rect.labelbBg")
+										.attr("class","labelbBg")
+										.attr("x",xS(xS.invert(midLineXPosition))-28)
+										.attr("y",xyMidLine[1]-30)
+										.attr("rx",4.33231+"px")
+										.attr("ry",4.33231+"px").attr("opacity",1);
+								d3.select("text.currText")
+										.attr("x", xS(xS.invert(midLineXPosition))-12)
+										.attr("y",xyMidLine[1]-15)
+										.text(mychartData[xyMidLine[2]].flow)
+										.attr("fill","#fff").attr("opacity",1);
+								d3.select("#date").text(dateFormat(mychartData[xyMidLine[2]].time));
+
+								moveDis = moveDis + 5;
+								// console.log("moveDis-----"+moveDis);
+								// console.log(parseInt(d3.select("#dragFab").style("margin-left")));
+								if(parseInt(d3.select("#dragFab").style("margin-left"))<screenWidth/2-20) {
+									requestAnimationFrame(function(){
+								    animate();
+								  
+								});
+								}
+								
+
+						
+					}
+
+					// var myLinear = d3.scale.linear()
+					// 						.range([0,100])
+					// 						.domain([0,1000]);
+
+					function animate2(){
+								var offset = 18+10;
+								myScale.range([minValue, maxValue]).domain(d3.extent(mychartData.map(function(d) { return d.time; })));	
+												
+								d3.select("g.x.axis.bottom")
+												.call(myxAxisBottom);
+								d3.select("path.chart").attr("d", myArea);
+								d3.select("path.chartLine").attr("d", myArea);
+
+								var xyMidLine = getXunit(mychartData.map(function(d){
+									return xS(d.time);
+								}),
+								mychartData.map(function(d){
+									return yS(d.flow);
+								})
+								,midLineXPosition);
+
+
+								//console.log(xyMidLine);
+								d3.select("line.pointLine")
+										.attr("x1",xyMidLine[0])
+										.attr("x2",xyMidLine[0])
+										.attr("y1",0)
+										.attr("y2",chartHeight);
+								d3.select("circle.circlebg")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 7;
+							 							});
+								d3.select("circle.circleup")
+										.attr("cx",xyMidLine[0])
+										.attr("cy",xyMidLine[1])
+										.attr("r",function(d){
+							 								return 3.5;
+							 							});
+								d3.select("rect.labelbBg")
+										.attr("class","labelbBg")
+										.attr("x",xS(xS.invert(midLineXPosition))-28)
+										.attr("y",xyMidLine[1]-30)
+										.attr("rx",4.33231+"px")
+										.attr("ry",4.33231+"px");
+								d3.select("text.currText")
+										.attr("x", xS(xS.invert(midLineXPosition))-12)
+										.attr("y",xyMidLine[1]-15)
+										.text(mychartData[xyMidLine[2]].flow)
+										.attr("fill","#fff");
+								d3.select("#date").text(dateFormat(mychartData[xyMidLine[2]].time));
+
+								d3.select("#dragFab").attr("style","background-image: url(images/drag_fab3.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+								d3.select("#fabBack").attr("style","background-image: url(images/fab_back.png);margin-left:"+(xyMidLine[0]-offset)).attr("opacity",1);
+
+								
+								minValue = minValue-5;maxValue = maxValue + 5;
+								console.log("minValue"+minValue);
+								console.log("maxValue"+maxValue);
+								// console.log("screenWidth*initTimeScaleParam[0]+initTimeScaleParam[1]----"+screenWidth*initTimeScaleParam[0]+initTimeScaleParam[1])
+								// console.log("initTimeScaleParam[1]----"+initTimeScaleParam[1]);
+								console.log("zoomMinValue"+zoomMinValue);
+								console.log(minValue < zoomMinValue);
+								if(maxValue < zoomMaxValue || minValue > zoomMinValue) {
+											requestAnimationFrame(function(){
+											    animate2(minValue,maxValue);
+										  
+											});
+								}
+								console.log(myScale.range());
+						}
+					
+
+		window.onload = function(){
+			initialize();
+			draw();
+			moveDis = 10;
+			minValue = 0;
+			maxValue = screenWidth;
+			
+			setTimeout(rippleLeft,1000);
+			setTimeout(rippleRight,1700);
+			setTimeout(rippleLeft1,3000);
+			setTimeout(setRippleBoxNone,3500);
+			setTimeout(animate2,1700)
+
+			
+		}
+	</script>
+</html>
